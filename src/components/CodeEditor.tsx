@@ -35,6 +35,7 @@ function ResultView({ result }: { result: RunResult }) {
           {result.stdout && <span class="stdout">{result.stdout}</span>}
           {result.stderr && <span class="stderr">{result.stderr}</span>}
           {!result.stdout && !result.stderr && <span class="rt-info">（程序无输出）</span>}
+          {result.note && <span class="rt-info">{result.note}</span>}
           {result.compilerInfo && (
             <span class="cc-info">GCC 输出：
 {result.compilerInfo}
@@ -106,9 +107,9 @@ export default function CodeEditor({ docId }: { docId: string }) {
   async function doRun(): Promise<void> {
     const v = viewRef.current;
     if (!v || run.phase === 'running') return;
-    // 运行前确保最新代码已保存
+    // 运行前确保最新代码已保存（带删除守卫，与 flushNow 一致）
     const code = v.state.doc.toString();
-    if (code !== initialRef.current) {
+    if (code !== initialRef.current && nodes.value.has(docId)) {
       initialRef.current = code;
       void putCode({ docId, code, updatedAt: Date.now() }).catch(() => {});
     }

@@ -114,6 +114,7 @@ int main(){ map<string,int> m; m["apple"]=3; m["banana"]=2; m["apple"]+=1;
     name: '中文注释 + iostream + stdin',
     stdin: '21\n',
     expect: 'n*2=42\n',
+    kind: 'ok',
     code: `// 中文注释：读入 n，输出 n 的两倍
 #include <iostream>
 using namespace std;
@@ -125,34 +126,91 @@ int main(){
 }
 `,
   },
+  {
+    name: '分类-编译错误（诊断含 error:）',
+    stdin: '',
+    kind: 'compile',
+    code: `int main( { return 0 }
+`,
+  },
+  {
+    name: '分类-段错误+warning 不误判为编译失败',
+    stdin: '',
+    kind: 'runtime',
+    code: `#include <iostream>
+using namespace std;
+int main(){
+    int unused_var;          // 触发 -Wunused warning
+    int* p = nullptr;
+    cout << *p << endl;      // SIGSEGV
+    return 0;
+}
+`,
+  },
+  {
+    name: '分类-warning+非零退出，stdout 保留',
+    stdin: '',
+    kind: 'runtime',
+    expectOut: 'RAN\n',
+    code: `#include <cstdio>
+int main(){
+    int unused_var;          // 触发 warning
+    printf("RAN\\n");
+    return 1;
+}
+`,
+  },
 ];
 
 const norm = s => String(s ?? '').replace(/\r\n/g, '\n');
+const hasErrorDiag = s => /\berror:/i.test(String(s ?? ''));
 
 let pass = 0;
 let fail = 0;
 for (const c of CASES) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
   try {
     const resp = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ compiler: 'gcc-13.2.0', code: c.code, stdin: c.stdin, options: 'warning,gnu++17' }),
+      body: JSON.stringify({
+        compiler: 'gcc-13.2.0',
+        code: c.code,
+        stdin: c.stdin ?? '',
+        options: 'warning,gnu++17',
+      }),
+      signal: ctrl.signal,
     });
     const data = await resp.json();
+    const status = String(data.status ?? '').trim() || '0';
     const out = norm(data.program_output);
-    const ok = String(data.status) === '0' && out === norm(c.expect);
+    let ok = false;
+    if (c.kind === 'compile') {
+      ok = hasErrorDiag(data.compiler_error);
+    } else if (c.kind === 'runtime') {
+      // 与 src/lib/compile.ts 的分类规则一致：非零退出且诊断无 error: → 运行时
+      ok = status !== '0' && !hasErrorDiag(data.compiler_error);
+      if (c.expectOut !== undefined) ok = ok && out.includes(norm(c.expectOut));
+    } else {
+      ok = status === '0' && out === norm(c.expect);
+    }
     if (ok) {
       pass++;
       console.log(`PASS  ${c.name}`);
     } else {
       fail++;
       console.log(`FAIL  ${c.name}`);
-      console.log(`  status=${data.status} expect=${JSON.stringify(norm(c.expect))} got=${JSON.stringify(out)}`);
+      console.log(
+        `  status=${JSON.stringify(status)} expect=${JSON.stringify(c.expect ?? c.kind)} got=${JSON.stringify(out)}`
+      );
       if (data.compiler_error) console.log(`  compiler_error: ${data.compiler_error.slice(0, 300)}`);
     }
   } catch (e) {
     fail++;
     console.log(`FAIL  ${c.name} (网络/异常: ${e.message})`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 console.log(`\n${pass}/${CASES.length} passed`);
