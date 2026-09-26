@@ -30,29 +30,36 @@ interface DirtySets {
 }
 let dirty: DirtySets = freshDirty();
 function freshDirty(): DirtySets {
-  return { nodes: new Set(), notes: new Set(), code: new Set(), images: new Set(), deletedNodes: [] };
+  return {
+    nodes: new Set(),
+    notes: new Set(),
+    code: new Set(),
+    images: new Set(),
+    deletedNodes: [],
+  };
 }
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let pushBusy = false;
 let pullBusy = false;
 
-function onDirty(kind: DirtyKind, id: string): void {
+function onDirty(kind: DirtyKind, id: string | string[]): void {
   if (getScope() === 'local' || !sessionSig.value) return;
   switch (kind) {
     case 'node':
-      dirty.nodes.add(id);
+      dirty.nodes.add(id as string);
       break;
     case 'note':
-      dirty.notes.add(id);
+      dirty.notes.add(id as string);
       break;
     case 'code':
-      dirty.code.add(id);
+      dirty.code.add(id as string);
       break;
     case 'image':
-      dirty.images.add(id);
+      dirty.images.add(id as string);
       break;
     case 'nodes-deleted':
-      dirty.deletedNodes.push(JSON.parse(id) as string[]);
+      dirty.deletedNodes.push(id as string[]);
       break;
   }
   syncStatus.value = 'pending';
@@ -70,10 +77,10 @@ interface RemoteNode {
   updated_at: string;
 }
 
-function toRemoteNode(r: NodeRow, uid: string): RemoteNode {
+function toRemoteNode(r: NodeRow): RemoteNode {
   return {
     id: r.id,
-    user_id: uid,
+    user_id: '',
     parent_id: r.parentId,
     name: r.name,
     kind: r.kind,
@@ -97,24 +104,59 @@ function throwIf(error: { message: string } | null): void {
   if (error) throw new Error(error.message);
 }
 
+const PAGE = 1000;
+
+/** 分页拉全量（Supabase 默认单请求最多 1000 行） */
+async function selectSince(
+  table: 'ds_nodes' | 'ds_notes' | 'ds_code' | 'ds_tombstones',
+  column: 'updated_at' | 'deleted_at',
+  sinceIso: string
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  for (let p = 0; ; p++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .gte(column, sinceIso)
+      .order(column, { ascending: true })
+      .range(p * PAGE, (p + 1) * PAGE - 1);
+    throwIf(error);
+    all.push(...((data ?? []) as Record<string, unknown>[]));
+    if (!data || data.length < PAGE) break;
+  }
+  return all;
+}
+
 export async function pushNow(): Promise<void> {
   const s = sessionSig.value;
-  if (!s || getScope() === 'local') return;
+  if (!s || getScope() === 'local' || pushBusy) return;
   if (pushTimer) {
     clearTimeout(pushTimer);
     pushTimer = null;
   }
+  pushBusy = true;
   const snap = dirty;
   dirty = freshDirty();
   const uid = s.user.id;
   syncStatus.value = 'syncing';
+  let didWork = false;
   try {
     const d = await getDB();
     if (snap.nodes.size) {
       const rows = (await d.getAll('nodes'))
         .filter(r => snap.nodes.has(r.id))
-        .map(r => toRemoteNode(r, uid));
-      if (rows.length) throwIf((await supabase.from('ds_nodes').upsert(rows)).error);
+        .map(toRemoteNode);
+      // updated_at 由服务器 trigger 统一改写（唯一时钟源）
+      if (rows.length) {
+        throwIf(
+          (
+            await supabase
+              .from('ds_nodes')
+              .upsert(rows.map(r => ({ ...r, user_id: uid })))
+          ).error
+        );
+        didWork = true;
+      }
     }
     if (snap.notes.size) {
       const rows = (await d.getAll('notes'))
@@ -125,7 +167,10 @@ export async function pushNow(): Promise<void> {
           html: r.html,
           updated_at: new Date(r.updatedAt).toISOString(),
         }));
-      if (rows.length) throwIf((await supabase.from('ds_notes').upsert(rows)).error);
+      if (rows.length) {
+        throwIf((await supabase.from('ds_notes').upsert(rows)).error);
+        didWork = true;
+      }
     }
     if (snap.code.size) {
       const rows = (await d.getAll('code'))
@@ -136,34 +181,53 @@ export async function pushNow(): Promise<void> {
           code: r.code,
           updated_at: new Date(r.updatedAt).toISOString(),
         }));
-      if (rows.length) throwIf((await supabase.from('ds_code').upsert(rows)).error);
+      if (rows.length) {
+        throwIf((await supabase.from('ds_code').upsert(rows)).error);
+        didWork = true;
+      }
     }
-    for (const imgId of snap.images) {
-      const row = await d.get('images', imgId);
-      if (!row) continue;
-      const path = `${uid}/${row.docId}/${imgId}`;
-      throwIf(
-        (
-          await supabase.storage
-            .from('ds-images')
-            .upload(path, row.blob, { upsert: true, contentType: row.blob.type || 'image/jpeg' })
-        ).error
+    if (snap.images.size) {
+      await Promise.all(
+        [...snap.images].map(async imgId => {
+          const row = await d.get('images', imgId);
+          if (!row) return;
+          const path = `${uid}/${row.docId}/${imgId}`;
+          throwIf(
+            (
+              await supabase.storage
+                .from('ds-images')
+                .upload(path, row.blob, {
+                  upsert: true,
+                  contentType: row.blob.type || 'image/jpeg',
+                })
+            ).error
+          );
+        })
       );
+      didWork = true;
     }
     if (snap.deletedNodes.length) {
       const ids = [...new Set(snap.deletedNodes.flat())];
       throwIf((await supabase.from('ds_nodes').delete().in('id', ids)).error);
       throwIf(
-        (
-          await supabase
-            .from('ds_tombstones')
-            .upsert(ids.map(id => ({ id, user_id: uid })))
-        ).error
+        (await supabase.from('ds_tombstones').upsert(ids.map(id => ({ id, user_id: uid })))).error
       );
+      // 远端级联删了 ds_notes/ds_code；存储桶里的图片目录做尽力清理
+      const bucket = supabase.storage.from('ds-images');
+      for (const id of ids) {
+        const { data: files } = await bucket.list(`${uid}/${id}`, { limit: 1000 });
+        if (files && files.length > 0) {
+          await bucket
+            .remove(files.map(f => `${uid}/${id}/${f.name}`))
+            .catch(() => {});
+        }
+      }
+      didWork = true;
     }
     syncStatus.value = 'synced';
+    // 推送成功后拉一次，让本地 updated_at 收敛到服务器时钟（有脏保护不会覆盖未推送修改）
+    if (didWork) setTimeout(() => void pullNow(), 800);
   } catch {
-    // 失败回灌脏集合，稍后自动重试
     snap.nodes.forEach(id => dirty.nodes.add(id));
     snap.notes.forEach(id => dirty.notes.add(id));
     snap.code.forEach(id => dirty.code.add(id));
@@ -171,6 +235,8 @@ export async function pushNow(): Promise<void> {
     dirty.deletedNodes.push(...snap.deletedNodes);
     syncStatus.value = 'pending';
     pushTimer = setTimeout(() => void pushNow(), 5000);
+  } finally {
+    pushBusy = false;
   }
 }
 
@@ -185,19 +251,23 @@ async function syncImagesFromCloud(d: Awaited<ReturnType<typeof getDB>>, uid: st
     const docId = folder.name;
     const { data: files, error: e2 } = await bucket.list(`${uid}/${docId}`, { limit: 1000 });
     if (e2) continue;
+    const missing = [] as string[];
     for (const f of files ?? []) {
-      const imgId = f.name;
-      if (await d.get('images', imgId)) continue;
-      const { data: blob, error: e3 } = await bucket.download(`${uid}/${docId}/${imgId}`);
-      if (e3 || !blob) continue;
-      await d.put('images', { id: imgId, docId, blob, updatedAt: Date.now() });
+      if (!(await d.get('images', f.name))) missing.push(f.name);
     }
+    await Promise.all(
+      missing.map(async imgId => {
+        const { data: blob, error: e3 } = await bucket.download(`${uid}/${docId}/${imgId}`);
+        if (e3 || !blob) return;
+        await d.put('images', { id: imgId, docId, blob, updatedAt: Date.now() });
+      })
+    );
   }
 }
 
 export async function pullNow(): Promise<void> {
   const s = sessionSig.value;
-  if (!s || pullBusy || getScope() === 'local') return;
+  if (!s || pullBusy || pushBusy || getScope() === 'local') return;
   pullBusy = true;
   syncStatus.value = 'syncing';
   try {
@@ -205,52 +275,63 @@ export async function pullNow(): Promise<void> {
     const lastMs = (await getMeta<number>('lastPullAt')) ?? 0;
     const since = new Date(Math.max(0, lastMs - 5000)).toISOString();
     const [nR, noR, cR, tR] = await Promise.all([
-      supabase.from('ds_nodes').select('*').gte('updated_at', since),
-      supabase.from('ds_notes').select('*').gte('updated_at', since),
-      supabase.from('ds_code').select('*').gte('updated_at', since),
-      supabase.from('ds_tombstones').select('*').gte('deleted_at', since),
+      selectSince('ds_nodes', 'updated_at', since),
+      selectSince('ds_notes', 'updated_at', since),
+      selectSince('ds_code', 'updated_at', since),
+      selectSince('ds_tombstones', 'deleted_at', since),
     ]);
-    throwIf(nR.error);
-    throwIf(noR.error);
-    throwIf(cR.error);
-    throwIf(tR.error);
 
-    // 墓碑先行：远端已删除的节点本地跟着删
-    const tombs = new Set(((tR.data ?? []) as Array<{ id: string }>).map(t => t.id));
+    // 本地有未推送修改的行不被远端覆盖（时间基准不同，内容优先）
+    const dirtyNode = new Set(dirty.nodes);
+
+    // 墓碑先行：远端已删除的节点本地跟着删（失败即抛，不推进 lastPullAt）
+    const tombs = new Set(tR.map(t => t.id as string));
     for (const id of tombs) {
-      await d.delete('nodes', id).catch(() => {});
-      await d.delete('notes', id).catch(() => {});
-      await d.delete('code', id).catch(() => {});
-      const imgKeys = await d.getAllKeysFromIndex('images', 'by-doc', id).catch(() => [] as string[]);
-      for (const k of imgKeys) await d.delete('images', k).catch(() => {});
+      await d.delete('nodes', id);
+      await d.delete('notes', id);
+      await d.delete('code', id);
+      const imgKeys = await d.getAllKeysFromIndex('images', 'by-doc', id);
+      for (const k of imgKeys) await d.delete('images', k);
     }
 
-    // LWW 合并（远端较新才覆盖本地）
-    for (const rn of (nR.data ?? []) as unknown as RemoteNode[]) {
-      if (tombs.has(rn.id)) continue;
+    let maxServerMs = Date.parse(since);
+    const bump = (v: unknown) => {
+      const ms = Date.parse(String(v));
+      if (Number.isFinite(ms) && ms > maxServerMs) maxServerMs = ms;
+    };
+
+    // LWW 合并（远端较新才覆盖本地；本地脏行跳过）
+    for (const raw of nR) {
+      const rn = raw as unknown as RemoteNode;
+      bump(rn.updated_at);
+      if (tombs.has(rn.id) || dirtyNode.has(rn.id)) continue;
       const local = await d.get('nodes', rn.id);
-      const rMs = Date.parse(rn.updated_at);
-      if (!local || local.updatedAt < rMs) await d.put('nodes', fromRemoteNode(rn));
-    }
-    for (const rn of (noR.data ?? []) as unknown as Array<{ doc_id: string; html: string; updated_at: string }>) {
-      if (tombs.has(rn.doc_id)) continue;
-      const local = await d.get('notes', rn.doc_id);
-      const rMs = Date.parse(rn.updated_at);
-      if (!local || local.updatedAt < rMs) {
-        await d.put('notes', { docId: rn.doc_id, html: rn.html ?? '', updatedAt: rMs });
+      if (!local || local.updatedAt < Date.parse(rn.updated_at)) {
+        await d.put('nodes', fromRemoteNode(rn));
       }
     }
-    for (const rn of (cR.data ?? []) as unknown as Array<{ doc_id: string; code: string; updated_at: string }>) {
-      if (tombs.has(rn.doc_id)) continue;
+    for (const raw of noR) {
+      const rn = raw as unknown as { doc_id: string; html: string; updated_at: string };
+      bump(rn.updated_at);
+      if (tombs.has(rn.doc_id) || dirty.notes.has(rn.doc_id)) continue;
+      const local = await d.get('notes', rn.doc_id);
+      if (!local || local.updatedAt < Date.parse(rn.updated_at)) {
+        await d.put('notes', { docId: rn.doc_id, html: rn.html ?? '', updatedAt: Date.parse(rn.updated_at) });
+      }
+    }
+    for (const raw of cR) {
+      const rn = raw as unknown as { doc_id: string; code: string; updated_at: string };
+      bump(rn.updated_at);
+      if (tombs.has(rn.doc_id) || dirty.code.has(rn.doc_id)) continue;
       const local = await d.get('code', rn.doc_id);
-      const rMs = Date.parse(rn.updated_at);
-      if (!local || local.updatedAt < rMs) {
-        await d.put('code', { docId: rn.doc_id, code: rn.code ?? '', updatedAt: rMs });
+      if (!local || local.updatedAt < Date.parse(rn.updated_at)) {
+        await d.put('code', { docId: rn.doc_id, code: rn.code ?? '', updatedAt: Date.parse(rn.updated_at) });
       }
     }
 
     await syncImagesFromCloud(d, s.user.id);
-    await putMeta('lastPullAt', Date.now());
+    // lastPullAt 用服务器时钟（远端行时间），避免客户端快钟漏拉
+    await putMeta('lastPullAt', maxServerMs);
     setNodeMap(await loadNodes());
     syncStatus.value = 'synced';
   } catch {
@@ -263,46 +344,72 @@ export async function pullNow(): Promise<void> {
 // ---------------- 登录态与作用域切换 ----------------
 
 async function adoptScope(userId: string): Promise<void> {
-  // 首次登录：把未登录期的本地数据合并进用户库（LWW），只做一次
-  const migrated = await getMeta<boolean>('migrated', 'local');
-  const localNodes = await loadNodes('local');
-  if (localNodes.length > 0 && !migrated) {
+  setScope(userId);
+  setNodeMap(await loadNodes());
+  // 先拉平云端，再合并未登录期的本地数据，避免本机旧数据回滚云端
+  await pullNow();
+  const guestNodes = await loadNodes('local');
+  if (guestNodes.length > 0) {
     const src = await getDB('local');
     const dst = await getDB(userId);
-    const [localNotes, localCodes, localImages] = await Promise.all([
+    const [gNotes, gCodes, gImages] = await Promise.all([
       src.getAll('notes'),
       src.getAll('code'),
       src.getAll('images'),
     ]);
-    for (const n of localNodes) {
-      const existing = await dst.get('nodes', n.id);
-      if (!existing || existing.updatedAt < n.updatedAt) await dst.put('nodes', n);
+    const pushNodes: string[] = [];
+    const pushNotes: string[] = [];
+    const pushCodes: string[] = [];
+    const pushImages: string[] = [];
+    for (const n of guestNodes) {
+      const ex = await dst.get('nodes', n.id);
+      if (!ex) {
+        await dst.put('nodes', n);
+        pushNodes.push(n.id);
+      } else if (n.updatedAt > ex.updatedAt + 2000) {
+        // 云端行是服务器时钟、本地是客户端时钟，加 2s 容差偏保守合并
+        await dst.put('nodes', n);
+        pushNodes.push(n.id);
+      }
     }
-    for (const n of localNotes) {
-      const existing = await dst.get('notes', n.docId);
-      if (!existing || existing.updatedAt < n.updatedAt) await dst.put('notes', n);
+    for (const n of gNotes) {
+      const ex = await dst.get('notes', n.docId);
+      if (!ex) {
+        await dst.put('notes', n);
+        pushNotes.push(n.docId);
+      } else if (n.updatedAt > ex.updatedAt + 2000) {
+        await dst.put('notes', n);
+        pushNotes.push(n.docId);
+      }
     }
-    for (const n of localCodes) {
-      const existing = await dst.get('code', n.docId);
-      if (!existing || existing.updatedAt < n.updatedAt) await dst.put('code', n);
+    for (const n of gCodes) {
+      const ex = await dst.get('code', n.docId);
+      if (!ex) {
+        await dst.put('code', n);
+        pushCodes.push(n.docId);
+      } else if (n.updatedAt > ex.updatedAt + 2000) {
+        await dst.put('code', n);
+        pushCodes.push(n.docId);
+      }
     }
-    for (const n of localImages) {
-      if (!(await dst.get('images', n.id))) await dst.put('images', n);
+    for (const n of gImages) {
+      if (!(await dst.get('images', n.id))) {
+        await dst.put('images', n);
+        pushImages.push(n.id);
+      }
     }
     await putMeta('migrated', true, 'local');
+    if (
+      pushNodes.length + pushNotes.length + pushCodes.length + pushImages.length > 0
+    ) {
+      pushNodes.forEach(id => dirty.nodes.add(id));
+      pushNotes.forEach(id => dirty.notes.add(id));
+      pushCodes.forEach(id => dirty.code.add(id));
+      pushImages.forEach(id => dirty.images.add(id));
+      setNodeMap(await loadNodes());
+      await pushNow();
+    }
   }
-  setScope(userId);
-  setNodeMap(await loadNodes());
-  // 迁移进来的数据要推上云
-  void (async () => {
-    const d = await getDB();
-    (await d.getAll('nodes')).forEach(r => dirty.nodes.add(r.id));
-    (await d.getAll('notes')).forEach(r => dirty.notes.add(r.docId));
-    (await d.getAll('code')).forEach(r => dirty.code.add(r.docId));
-    (await d.getAll('images')).forEach(r => dirty.images.add(r.id));
-    syncStatus.value = 'pending';
-    await pushNow();
-  })();
 }
 
 async function refreshProfile(s: Session): Promise<void> {
@@ -335,7 +442,9 @@ export async function initAuth(): Promise<void> {
     if (sessionSig.value) void pullNow();
   });
   setInterval(() => {
-    if (sessionSig.value) void pullNow();
+    if (!sessionSig.value) return;
+    void pullNow();
+    void refreshProfile(sessionSig.value!); // 禁用状态周期性生效
   }, 90_000);
 
   const { data } = await supabase.auth.getSession();
@@ -358,6 +467,7 @@ export async function initAuth(): Promise<void> {
     } else if (ev === 'SIGNED_OUT') {
       sessionSig.value = null;
       profileSig.value = null;
+      dirty = freshDirty();
       setScope('local');
       location.reload();
     }

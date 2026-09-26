@@ -58,16 +58,17 @@ create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
 begin new.updated_at = now(); return new; end $$;
 
+-- insert/update 都用服务器时钟，杜绝客户端时钟参与 LWW 比较
 drop trigger if exists trg_ds_nodes_touch on public.ds_nodes;
-create trigger trg_ds_nodes_touch before update on public.ds_nodes
+create trigger trg_ds_nodes_touch before insert or update on public.ds_nodes
   for each row execute function public.touch_updated_at();
 
 drop trigger if exists trg_ds_notes_touch on public.ds_notes;
-create trigger trg_ds_notes_touch before update on public.ds_notes
+create trigger trg_ds_notes_touch before insert or update on public.ds_notes
   for each row execute function public.touch_updated_at();
 
 drop trigger if exists trg_ds_code_touch on public.ds_code;
-create trigger trg_ds_code_touch before update on public.ds_code
+create trigger trg_ds_code_touch before insert or update on public.ds_code
   for each row execute function public.touch_updated_at();
 
 -- ---------- 行级安全：每个用户只能读写自己的行 ----------
@@ -83,11 +84,25 @@ create policy ds_nodes_all on public.ds_nodes for all
 
 drop policy if exists ds_notes_all on public.ds_notes;
 create policy ds_notes_all on public.ds_notes for all
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (
+    user_id = auth.uid()
+    and doc_id in (select id from public.ds_nodes where user_id = auth.uid())
+  )
+  with check (
+    user_id = auth.uid()
+    and doc_id in (select id from public.ds_nodes where user_id = auth.uid())
+  );
 
 drop policy if exists ds_code_all on public.ds_code;
 create policy ds_code_all on public.ds_code for all
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (
+    user_id = auth.uid()
+    and doc_id in (select id from public.ds_nodes where user_id = auth.uid())
+  )
+  with check (
+    user_id = auth.uid()
+    and doc_id in (select id from public.ds_nodes where user_id = auth.uid())
+  );
 
 drop policy if exists ds_tombstones_all on public.ds_tombstones;
 create policy ds_tombstones_all on public.ds_tombstones for all
@@ -117,4 +132,12 @@ create policy "ds-img-delete" on storage.objects for delete
   using (bucket_id = 'ds-images' and auth.uid()::text = (storage.foldername(name))[1]);
 
 -- ---------- 完成 ----------
--- 管理员能力（查看/禁用账号）直接复用词汇站的 profiles 表与相关策略，无需新增。
+-- 管理员能力：显式钉死 profiles 的读写策略（幂等覆盖，不依赖另一仓库的配置）：
+-- 普通用户只能读自己的档案，读全员/改/禁用一律要求 is_admin()
+drop policy if exists profiles_select on public.profiles;
+create policy profiles_select on public.profiles for select
+  using (id = auth.uid() or public.is_admin());
+
+drop policy if exists profiles_update on public.profiles;
+create policy profiles_update on public.profiles for update
+  using (public.is_admin()) with check (public.is_admin());

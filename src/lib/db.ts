@@ -27,14 +27,14 @@ export function setScope(scope: string): void {
 // ---------------- 同步脏标记挂点（sync.ts 注册） ----------------
 
 export type DirtyKind = 'node' | 'note' | 'code' | 'image' | 'nodes-deleted';
-type DirtyHook = (kind: DirtyKind, id: string) => void;
+type DirtyHook = (kind: DirtyKind, id: string | string[]) => void;
 let dirtyHook: DirtyHook | null = null;
 
 export function setDirtyHook(h: DirtyHook | null): void {
   dirtyHook = h;
 }
 
-function markDirty(kind: DirtyKind, id: string): void {
+function markDirty(kind: DirtyKind, id: string | string[]): void {
   if (activeScope !== 'local') dirtyHook?.(kind, id);
 }
 
@@ -83,7 +83,7 @@ export async function deleteNodes(ids: string[], scope: string = activeScope): P
   const tx = d.transaction('nodes', 'readwrite');
   for (const id of ids) tx.store.delete(id);
   await tx.done;
-  if (scope === activeScope) markDirty('nodes-deleted', JSON.stringify(ids));
+  if (scope === activeScope) markDirty('nodes-deleted', ids);
 }
 
 // ---------------- notes / code ----------------
