@@ -160,6 +160,13 @@ body {
   flex: 1; margin: 0; overflow: auto; padding: 8px 12px;
   font-family: Consolas, monospace; font-size: 13px; white-space: pre-wrap; color: var(--muted);
 }
+.run-out .stdout { color: var(--text); }
+.run-out .stderr { color: var(--danger); }
+.run-out .net-warn { color: #b26a00; }
+.run-out .rt-info { color: var(--muted); display: block; margin-top: 6px; }
+.run-out .cc-info { color: var(--muted); display: block; margin-top: 6px; opacity: 0.85; }
+.run-out .out-label { display: block; margin-bottom: 4px; }
+.run-out .out-label.err { color: var(--danger); font-weight: 600; }
 
 /* ---------- buttons / modal / toast ---------- */
 button.primary {
