@@ -15,6 +15,16 @@ const SYNC_ICON: Record<string, string> = {
   syncing: '🔄 同步中',
   synced: '☁️ 已同步',
   offline: '⚠️ 离线',
+  uninit: '🗄️ 云未初始化',
+};
+
+const SYNC_TITLE: Record<string, string> = {
+  local: '点击登录 / 注册',
+  pending: '有改动待推送到云端，点击立即同步',
+  syncing: '正在与云端同步…',
+  synced: '已与云端同步，点击立即拉取',
+  offline: '刚才的同步请求失败（网络问题），稍后会自动重试',
+  uninit: '云端数据表还没建：请先在 Supabase SQL Editor 执行仓库里的 supabase_setup_ds.sql，执行完刷新本页即可',
 };
 
 export function TopBar() {
@@ -84,7 +94,7 @@ export function TopBar() {
       <div class="topbar-right">
         <button
           class="ghost-btn sync-btn"
-          title={sess ? '点击立即从云端拉取' : '点击登录 / 注册'}
+          title={SYNC_TITLE[st] ?? ''}
           onClick={() => (sess ? void pullNow() : (showAuth.value = true))}
         >
           {SYNC_ICON[st] ?? ''}

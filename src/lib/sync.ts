@@ -14,10 +14,21 @@ import {
 import { setNodeMap } from '../state';
 import type { NodeRow } from '../types';
 
-export type SyncStatus = 'local' | 'pending' | 'syncing' | 'synced' | 'offline';
+export type SyncStatus = 'local' | 'pending' | 'syncing' | 'synced' | 'offline' | 'uninit';
 export const syncStatus = signal<SyncStatus>('local');
 export const sessionSig = signal<Session | null>(null);
 export const profileSig = signal<{ email: string; isAdmin: boolean } | null>(null);
+
+/** 云端表还没建（用户未执行 supabase_setup_ds.sql）——与网络故障区分开 */
+function isUninitError(e: unknown): boolean {
+  const m = String((e as { message?: string })?.message ?? e ?? '').toLowerCase();
+  return (
+    m.includes('does not exist') ||
+    m.includes('schema cache') ||
+    m.includes('pgrst205') ||
+    m.includes('42p01')
+  );
+}
 
 // ---------------- 脏集合与推送 ----------------
 
@@ -227,14 +238,19 @@ export async function pushNow(): Promise<void> {
     syncStatus.value = 'synced';
     // 推送成功后拉一次，让本地 updated_at 收敛到服务器时钟（有脏保护不会覆盖未推送修改）
     if (didWork) setTimeout(() => void pullNow(), 800);
-  } catch {
+  } catch (e) {
     snap.nodes.forEach(id => dirty.nodes.add(id));
     snap.notes.forEach(id => dirty.notes.add(id));
     snap.code.forEach(id => dirty.code.add(id));
     snap.images.forEach(id => dirty.images.add(id));
     dirty.deletedNodes.push(...snap.deletedNodes);
-    syncStatus.value = 'pending';
-    pushTimer = setTimeout(() => void pushNow(), 5000);
+    if (isUninitError(e)) {
+      // 云表未建：保留脏集合但不空转重试，等下次触发（编辑/聚焦/上线）
+      syncStatus.value = 'uninit';
+    } else {
+      syncStatus.value = 'pending';
+      pushTimer = setTimeout(() => void pushNow(), 5000);
+    }
   } finally {
     pushBusy = false;
   }
@@ -334,8 +350,8 @@ export async function pullNow(): Promise<void> {
     await putMeta('lastPullAt', maxServerMs);
     setNodeMap(await loadNodes());
     syncStatus.value = 'synced';
-  } catch {
-    syncStatus.value = 'offline';
+  } catch (e) {
+    syncStatus.value = isUninitError(e) ? 'uninit' : 'offline';
   } finally {
     pullBusy = false;
   }
