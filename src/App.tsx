@@ -7,6 +7,7 @@ import { ConfirmHost, Toast } from './components/Modal';
 import { setNodeMap } from './state';
 import { loadNodes } from './lib/db';
 import { loadSettings } from './lib/settings';
+import { initAuth } from './lib/sync';
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -15,9 +16,10 @@ export function App() {
   useEffect(() => {
     (async () => {
       try {
+        await loadSettings();
+        await initAuth();
         setNodeMap(await loadNodes());
         expandAllDirs();
-        await loadSettings();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }

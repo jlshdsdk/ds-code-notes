@@ -10,10 +10,37 @@ interface DsSchema extends DBSchema {
   meta: { key: string; value: { key: string; value: unknown } };
 }
 
-/** P1/P2 未登录阶段用 'local'；P3 登录后按用户切独立库名，首次登录做一次迁移 */
+/**
+ * local = 未登录的本地库；登录后 activeScope 切到 userId（首次登录做一次迁移）。
+ * 所有读写默认落在当前活动库。
+ */
+let activeScope = 'local';
+
+export function getScope(): string {
+  return activeScope;
+}
+
+export function setScope(scope: string): void {
+  activeScope = scope;
+}
+
+// ---------------- 同步脏标记挂点（sync.ts 注册） ----------------
+
+export type DirtyKind = 'node' | 'note' | 'code' | 'image' | 'nodes-deleted';
+type DirtyHook = (kind: DirtyKind, id: string) => void;
+let dirtyHook: DirtyHook | null = null;
+
+export function setDirtyHook(h: DirtyHook | null): void {
+  dirtyHook = h;
+}
+
+function markDirty(kind: DirtyKind, id: string): void {
+  if (activeScope !== 'local') dirtyHook?.(kind, id);
+}
+
 const dbCache = new Map<string, Promise<IDBPDatabase<DsSchema>>>();
 
-export function getDB(scope = 'local'): Promise<IDBPDatabase<DsSchema>> {
+export function getDB(scope: string = activeScope): Promise<IDBPDatabase<DsSchema>> {
   let p = dbCache.get(scope);
   if (!p) {
     p = openDB<DsSchema>(`ds-notes--${scope}`, 1, {
@@ -34,53 +61,59 @@ export function getDB(scope = 'local'): Promise<IDBPDatabase<DsSchema>> {
 
 // ---------------- nodes ----------------
 
-export async function loadNodes(scope = 'local'): Promise<NodeRow[]> {
+export async function loadNodes(scope: string = activeScope): Promise<NodeRow[]> {
   return (await getDB(scope)).getAll('nodes');
 }
 
-export async function putNode(row: NodeRow, scope = 'local'): Promise<void> {
+export async function putNode(row: NodeRow, scope: string = activeScope): Promise<void> {
   await (await getDB(scope)).put('nodes', row);
+  markDirty('node', row.id);
 }
 
-export async function putNodes(rows: NodeRow[], scope = 'local'): Promise<void> {
+export async function putNodes(rows: NodeRow[], scope: string = activeScope): Promise<void> {
   const d = await getDB(scope);
   const tx = d.transaction('nodes', 'readwrite');
   for (const r of rows) tx.store.put(r);
   await tx.done;
+  if (scope === activeScope) for (const r of rows) markDirty('node', r.id);
 }
 
-export async function deleteNodes(ids: string[], scope = 'local'): Promise<void> {
+export async function deleteNodes(ids: string[], scope: string = activeScope): Promise<void> {
   const d = await getDB(scope);
   const tx = d.transaction('nodes', 'readwrite');
   for (const id of ids) tx.store.delete(id);
   await tx.done;
+  if (scope === activeScope) markDirty('nodes-deleted', JSON.stringify(ids));
 }
 
 // ---------------- notes / code ----------------
 
-export async function getNote(docId: string, scope = 'local'): Promise<NoteRow | undefined> {
+export async function getNote(docId: string, scope: string = activeScope): Promise<NoteRow | undefined> {
   return (await getDB(scope)).get('notes', docId);
 }
 
-export async function putNote(row: NoteRow, scope = 'local'): Promise<void> {
+export async function putNote(row: NoteRow, scope: string = activeScope): Promise<void> {
   await (await getDB(scope)).put('notes', row);
+  markDirty('note', row.docId);
 }
 
-export async function getCode(docId: string, scope = 'local'): Promise<CodeRow | undefined> {
+export async function getCode(docId: string, scope: string = activeScope): Promise<CodeRow | undefined> {
   return (await getDB(scope)).get('code', docId);
 }
 
-export async function putCode(row: CodeRow, scope = 'local'): Promise<void> {
+export async function putCode(row: CodeRow, scope: string = activeScope): Promise<void> {
   await (await getDB(scope)).put('code', row);
+  markDirty('code', row.docId);
 }
 
 // ---------------- images ----------------
 
-export async function putImage(row: ImageRow, scope = 'local'): Promise<void> {
+export async function putImage(row: ImageRow, scope: string = activeScope): Promise<void> {
   await (await getDB(scope)).put('images', row);
+  markDirty('image', row.id);
 }
 
-export async function getImage(id: string, scope = 'local'): Promise<ImageRow | undefined> {
+export async function getImage(id: string, scope: string = activeScope): Promise<ImageRow | undefined> {
   return (await getDB(scope)).get('images', id);
 }
 
@@ -91,7 +124,7 @@ export interface DeletedImages {
 }
 
 /** 删除一批文档的笔记、代码、图片（不含目录节点本身） */
-export async function deleteDocsData(docIds: string[], scope = 'local'): Promise<DeletedImages> {
+export async function deleteDocsData(docIds: string[], scope: string = activeScope): Promise<DeletedImages> {
   const d = await getDB(scope);
   const imgIds: string[] = [];
   const tx = d.transaction(['notes', 'code', 'images'], 'readwrite');
@@ -111,20 +144,20 @@ export async function deleteDocsData(docIds: string[], scope = 'local'): Promise
 
 // ---------------- settings / meta ----------------
 
-export async function getSetting<T>(key: string, scope = 'local'): Promise<T | undefined> {
+export async function getSetting<T>(key: string, scope: string = activeScope): Promise<T | undefined> {
   const row = await (await getDB(scope)).get('settings', key);
   return row?.value as T | undefined;
 }
 
-export async function putSetting(key: string, value: unknown, scope = 'local'): Promise<void> {
+export async function putSetting(key: string, value: unknown, scope: string = activeScope): Promise<void> {
   await (await getDB(scope)).put('settings', { key, value });
 }
 
-export async function getMeta<T>(key: string, scope = 'local'): Promise<T | undefined> {
+export async function getMeta<T>(key: string, scope: string = activeScope): Promise<T | undefined> {
   const row = await (await getDB(scope)).get('meta', key);
   return row?.value as T | undefined;
 }
 
-export async function putMeta(key: string, value: unknown, scope = 'local'): Promise<void> {
+export async function putMeta(key: string, value: unknown, scope: string = activeScope): Promise<void> {
   await (await getDB(scope)).put('meta', { key, value });
 }

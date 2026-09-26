@@ -3,6 +3,7 @@ import preact from '@preact/preset-vite';
 
 export default defineConfig({
   plugins: [preact()],
+  base: '/ds-code-notes/',
   build: {
     target: 'es2020',
     chunkSizeWarningLimit: 900,
