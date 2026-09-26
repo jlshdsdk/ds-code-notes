@@ -54,11 +54,11 @@ export const childrenByParent = computed(() => {
   return byParent;
 });
 
-/** 层级深度：根下目录=1，其子目录=2，文档=3 */
+/** 层级深度：根下目录=1，其子目录=2，文档=3；步数上限做环防御（脏数据不至于死循环） */
 export function depthOf(id: string): number {
   let d = 1;
   let p = nodes.value.get(id)?.parentId ?? null;
-  while (p) {
+  while (p && d < 8) {
     d++;
     p = nodes.value.get(p)?.parentId ?? null;
   }

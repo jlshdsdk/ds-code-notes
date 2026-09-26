@@ -1,37 +1,50 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import type { EditorView } from '@codemirror/view';
 import { getCode, putCode } from '../lib/db';
 import { makeEditorView } from '../lib/cm';
+import { nodes } from '../state';
 
 export default function CodeEditor({ docId }: { docId: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const initialRef = useRef('');
-  const [ready, setReady] = useState(false);
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    // 卸载/隐藏时立即落盘；节点已删除则不写（防删除后把行"复活"成孤儿）
+    const flushNow = () => {
+      const v = viewRef.current;
+      if (!v || !dirtyRef.current) return;
+      if (!nodes.value.has(docId)) return;
+      dirtyRef.current = false;
+      void putCode({ docId, code: v.state.doc.toString(), updatedAt: Date.now() }).catch(
+        () => {}
+      );
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    document.addEventListener('visibilitychange', onVis);
     (async () => {
       const row = await getCode(docId);
       if (cancelled || !hostRef.current) return;
       initialRef.current = row?.code ?? '';
       viewRef.current = makeEditorView(hostRef.current, initialRef.current, code => {
-        void putCode({ docId, code, updatedAt: Date.now() });
+        dirtyRef.current = true;
+        if (!nodes.value.has(docId)) return;
+        void putCode({ docId, code, updatedAt: Date.now() }).catch(() => {});
       });
-      setReady(true);
     })();
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
       const v = viewRef.current;
       if (v) {
-        const cur = v.state.doc.toString();
-        if (cur !== initialRef.current) {
-          void putCode({ docId, code: cur, updatedAt: Date.now() });
-        }
+        flushNow();
         v.destroy();
         viewRef.current = null;
       }
-      setReady(false);
     };
   }, [docId]);
 

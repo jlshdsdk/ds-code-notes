@@ -21,17 +21,38 @@ export function nextOrder(parentId: string | null): number {
   return list[list.length - 1].order + 1024;
 }
 
-/** 插到 target 前面/后面，取中点序号 */
-export function orderNear(target: NodeRow, mode: 'before' | 'after'): number {
-  const list = childrenByParent.value.get(target.parentId) ?? [];
+/**
+ * 计划一次"插到 target 前面/后面"的移动。
+ * 返回落点序号；若中点精度耗尽（间隙 <1e-6），附带整组兄弟的重排方案。
+ */
+export function planAdjacentMove(
+  draggedId: string,
+  target: NodeRow,
+  mode: 'before' | 'after'
+): { parentId: string | null; order: number; renumber: NodeRow[] } {
+  const list = (childrenByParent.value.get(target.parentId) ?? []).filter(
+    n => n.id !== draggedId
+  );
   const i = list.findIndex(n => n.id === target.id);
-  if (i < 0) return target.order;
-  if (mode === 'before') {
-    const prev = list[i - 1];
-    return prev ? (prev.order + target.order) / 2 : target.order - 1024;
+  const idx = i < 0 ? list.length : mode === 'before' ? i : i + 1;
+  const prev = list[idx - 1];
+  const next = list[idx];
+  if (!prev && !next) {
+    return { parentId: target.parentId, order: 1024, renumber: [] };
   }
-  const next = list[i + 1];
-  return next ? (target.order + next.order) / 2 : target.order + 1024;
+  if (!prev) return { parentId: target.parentId, order: next!.order - 1024, renumber: [] };
+  if (!next) return { parentId: target.parentId, order: prev.order + 1024, renumber: [] };
+  const mid = (prev.order + next.order) / 2;
+  if (Math.abs(mid - prev.order) < 1e-6 || Math.abs(mid - next.order) < 1e-6) {
+    const withDragged = [...list];
+    withDragged.splice(idx, 0, target);
+    return {
+      parentId: target.parentId,
+      order: (idx + 1) * 1024,
+      renumber: withDragged.map((n, k) => ({ ...n, order: (k + 1) * 1024 })),
+    };
+  }
+  return { parentId: target.parentId, order: mid, renumber: [] };
 }
 
 export interface SubtreeStats {

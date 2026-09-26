@@ -16,10 +16,10 @@ import {
   collectSubtreeIds,
   hasSiblingName,
   nextOrder,
-  orderNear,
+  planAdjacentMove,
   subtreeStats,
 } from '../lib/tree';
-import { deleteDocsData, deleteNodes, putNode } from '../lib/db';
+import { deleteDocsData, deleteNodes, putNode, putNodes } from '../lib/db';
 import { revokeImageUrl } from '../lib/images';
 import { MAX_NAME_LEN, type NodeKind, type NodeRow } from '../types';
 
@@ -94,7 +94,7 @@ function commitCreate(parentId: string | null, kind: NodeKind, name: string): vo
     updatedAt: Date.now(),
   };
   upsertNode(row);
-  void putNode(row);
+  putNode(row).catch(() => showToast('保存失败，请重试'));
   if (parentId) expanded.value = new Set(expanded.value).add(parentId);
   if (kind === 'doc') currentDocId.value = row.id;
 }
@@ -108,29 +108,56 @@ function commitRename(node: NodeRow, name: string): void {
   }
   const row: NodeRow = { ...node, name, updatedAt: Date.now() };
   upsertNode(row);
-  void putNode(row);
+  putNode(row).catch(() => showToast('保存失败，请重试'));
 }
 
-async function moveNode(dragged: NodeRow, parentId: string | null, order: number): Promise<void> {
+async function moveNode(
+  dragged: NodeRow,
+  parentId: string | null,
+  order: number,
+  renumber: NodeRow[] = []
+): Promise<void> {
+  // 禁止移入自己或自己的子树（防父指针环，环会让 depthOf/递归渲染死循环）
+  if (parentId !== null && collectSubtreeIds(dragged.id).includes(parentId)) {
+    showToast('不能移动到自己的子树内');
+    return;
+  }
   if (!canNestUnder(parentId, dragged.kind)) {
     showToast('不能移动到这个位置');
     return;
   }
-  if (dragged.parentId === parentId && dragged.order === order) return;
+  // 含目录后代的目录只能放根下，否则子树整体深度非法化（后代文档拖不动）
+  if (dragged.kind === 'dir' && parentId !== null) {
+    const hasDirDescendant = collectSubtreeIds(dragged.id).some(id => {
+      const n = nodes.value.get(id);
+      return !!n && n.id !== dragged.id && n.kind === 'dir';
+    });
+    if (hasDirDescendant) {
+      showToast('该目录包含子目录，只能放在根下');
+      return;
+    }
+  }
+  if (dragged.parentId === parentId && dragged.order === order && renumber.length === 0) return;
   if (hasSiblingName(parentId, dragged.name, dragged.id)) {
     showToast('目标位置已有同名项');
     return;
   }
-  const row: NodeRow = { ...dragged, parentId, order, updatedAt: Date.now() };
-  upsertNode(row);
-  await putNode(row);
+  const stamp = Date.now();
+  const rows: NodeRow[] = [{ ...dragged, parentId, order, updatedAt: stamp }];
+  for (const r of renumber) {
+    if (r.id !== dragged.id) rows.push({ ...r, updatedAt: stamp });
+  }
+  for (const r of rows) upsertNode(r);
+  try {
+    await putNodes(rows);
+  } catch {
+    showToast('保存失败，请重试');
+  }
 }
 
 function requestDelete(node: NodeRow): void {
   const isDoc = node.kind === 'doc';
   const stats = isDoc ? null : subtreeStats(node.id);
-  const ids = collectSubtreeIds(node.id);
-  const docIds = isDoc ? [node.id] : collectDocIds(node.id);
   const body = isDoc
     ? '将删除该节点的笔记内容、代码和图片，不可恢复。'
     : `将删除其下 ${stats!.dirs} 个子目录、${stats!.docs} 个笔记节点（含全部笔记、代码和图片），不可恢复。`;
@@ -140,13 +167,21 @@ function requestDelete(node: NodeRow): void {
     danger: true,
     okText: '删除',
     onOk: async () => {
-      const del = await deleteDocsData(docIds);
-      for (const imgId of del.ids) revokeImageUrl(imgId);
-      await deleteNodes(ids);
-      removeNodes(ids);
-      if (currentDocId.value && ids.includes(currentDocId.value)) currentDocId.value = null;
+      // 弹窗打开期间树可能已变化，落库前重新快照
+      const ids2 = collectSubtreeIds(node.id);
+      const docIds2 = collectDocIds(node.id);
+      if (!ids2.includes(node.id)) return;
+      try {
+        const del = await deleteDocsData(docIds2);
+        for (const imgId of del.ids) revokeImageUrl(imgId);
+        await deleteNodes(ids2);
+        removeNodes(ids2);
+        if (currentDocId.value && ids2.includes(currentDocId.value)) currentDocId.value = null;
         showToast('已删除');
-      },
+      } catch {
+        showToast('删除失败，请重试');
+      }
+    },
   };
 }
 
@@ -189,7 +224,10 @@ function TreeNode({ node }: { node: NodeRow }) {
         onDblClick={() => (renaming.value = node.id)}
         onDragStart={e => {
           dragId = node.id;
-          if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', node.id);
+          }
         }}
         onDragEnd={() => {
           dragId = null;
@@ -223,7 +261,8 @@ function TreeNode({ node }: { node: NodeRow }) {
               expanded.value = new Set(expanded.value).add(node.id);
               void moveNode(dragged, node.id, nextOrder(node.id));
             } else {
-              void moveNode(dragged, node.parentId, orderNear(node, mode));
+              const plan = planAdjacentMove(dragged.id, node, mode);
+              void moveNode(dragged, plan.parentId, plan.order, plan.renumber);
             }
           }
           dragId = null;
@@ -290,7 +329,10 @@ function TreeNode({ node }: { node: NodeRow }) {
               <NameInput
                 initial=""
                 placeholder={creating.value.kind === 'doc' ? '笔记节点名' : '二级目录名'}
-                onCommit={name => commitCreate(node.id, creating.value!.kind, name)}
+                onCommit={name => {
+                  const c = creating.value;
+                  if (c) commitCreate(node.id, c.kind, name);
+                }}
                 onCancel={() => (creating.value = null)}
               />
             </div>
@@ -337,7 +379,10 @@ export function Sidebar() {
             <NameInput
               initial=""
               placeholder="一级目录名"
-              onCommit={name => commitCreate(null, creating.value!.kind, name)}
+              onCommit={name => {
+                const c = creating.value;
+                if (c) commitCreate(null, c.kind, name);
+              }}
               onCancel={() => (creating.value = null)}
             />
           </div>

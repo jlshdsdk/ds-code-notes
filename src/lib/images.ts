@@ -4,18 +4,25 @@ const MAX_DIM = 1600;
 const MAX_BYTES = 1024 * 1024;
 
 const urlCache = new Map<string, string>();
+const pending = new Map<string, Promise<string | null>>();
 
-export async function resolveImageUrl(imgId: string): Promise<string | null> {
-  const hit = urlCache.get(imgId);
+export async function resolveImageUrl(imgId: string | null | undefined): Promise<string | null> {
+  if (!imgId) return null;
+  const hit = pending.get(imgId);
   if (hit) return hit;
-  const row = await getImage(imgId);
-  if (!row) return null;
-  const url = URL.createObjectURL(row.blob);
-  urlCache.set(imgId, url);
-  return url;
+  const p = (async () => {
+    const row = await getImage(imgId);
+    if (!row) return null;
+    const url = URL.createObjectURL(row.blob);
+    urlCache.set(imgId, url);
+    return url;
+  })().catch(() => null);
+  pending.set(imgId, p);
+  return p;
 }
 
 export function revokeImageUrl(imgId: string): void {
+  pending.delete(imgId);
   const url = urlCache.get(imgId);
   if (url) {
     URL.revokeObjectURL(url);

@@ -12,7 +12,7 @@ import { getDB, putNote } from '../lib/db';
 import { highlightCpp } from '../lib/highlight';
 import { resolveImageUrl, storeImageFile } from '../lib/images';
 import { debounce } from '../lib/util';
-import { showToast } from '../state';
+import { nodes, showToast } from '../state';
 
 // ---------------- 扩展：textStyle 带字号/字体 ----------------
 
@@ -152,6 +152,10 @@ const CppSnippet = Node.create({
         snippetDraft.value = {
           code: (node.attrs.code as string) ?? '',
           save: newCode => {
+            if (ed.isDestroyed) {
+              snippetDraft.value = null;
+              return;
+            }
             const pos = typeof getPos === 'function' ? getPos() : undefined;
             if (typeof pos === 'number') {
               ed.view.dispatch(ed.view.state.tr.setNodeMarkup(pos, undefined, { code: newCode }));
@@ -220,12 +224,34 @@ export default function NoteEditor({ docId }: { docId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    let save: ReturnType<typeof debounce<[string]>> | null = null;
+    // 卸载/隐藏时立即落盘；节点已删除则不写（防删除后把行"复活"成孤儿）
+    const flushNow = () => {
+      const ed = editorRef.current;
+      if (!ed || ed.isDestroyed || !dirtyRef.current) return;
+      if (!nodes.value.has(docId)) return;
+      dirtyRef.current = false;
+      void putNote({ docId, html: ed.getHTML(), updatedAt: Date.now() }).catch(() =>
+        showToast('笔记保存失败')
+      );
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        save?.cancel();
+        flushNow();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
     (async () => {
       const row = await (await getDB()).get('notes', docId);
       if (cancelled || !hostRef.current) return;
-      const save = debounce((html: string) => {
-        void putNote({ docId, html, updatedAt: Date.now() });
+      save = debounce((html: string) => {
+        if (!nodes.value.has(docId)) return;
+        void putNote({ docId, html, updatedAt: Date.now() }).catch(() =>
+          showToast('笔记保存失败')
+        );
       }, 800);
+      const saveDebounced = save;
       const ed = new Editor({
         element: hostRef.current,
         extensions: [StarterKit, DsTextStyle, Color, DsImage, CppSnippet],
@@ -243,7 +269,7 @@ export default function NoteEditor({ docId }: { docId: string }) {
         },
         onUpdate: ({ editor: cur }) => {
           dirtyRef.current = true;
-          save(cur.getHTML());
+          saveDebounced(cur.getHTML());
         },
       });
       editorRef.current = ed;
@@ -255,11 +281,12 @@ export default function NoteEditor({ docId }: { docId: string }) {
     })();
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
+      snippetDraft.value = null;
+      save?.cancel();
       const ed = editorRef.current;
       if (ed) {
-        if (dirtyRef.current) {
-          void putNote({ docId, html: ed.getHTML(), updatedAt: Date.now() });
-        }
+        flushNow();
         ed.destroy();
         editorRef.current = null;
         setEditor(null);
@@ -269,9 +296,9 @@ export default function NoteEditor({ docId }: { docId: string }) {
   }, [docId]);
 
   async function insertImages(files: File[]): Promise<void> {
-    const ed = editorRef.current;
-    if (!ed) return;
     for (const f of files) {
+      const ed = editorRef.current;
+      if (!ed || ed.isDestroyed) return;
       try {
         const imgId = await storeImageFile(f, docId);
         ed.chain().focus().insertContent({ type: 'dsImage', attrs: { imgId } }).run();
