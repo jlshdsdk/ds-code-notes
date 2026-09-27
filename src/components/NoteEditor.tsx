@@ -128,7 +128,17 @@ let brushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** 取光标/选区起点处的格式（Word 格式刷语义：光标在样板文字上） */
 function captureFormat(ed: Editor): BrushFormat {
-  const marks = ed.state.selection.$from.marks();
+  const sel = ed.state.selection;
+  let marks: readonly { type: { name: string }; attrs: Record<string, unknown> }[] = [];
+  if (sel.empty) {
+    // 光标态：优先刚通过按钮设置的"存储格式"，其次取光标前文字的格式
+    const stored = ed.state.storedMarks ?? [];
+    marks = stored.length ? stored : sel.$from.marks();
+    if (!marks.length) marks = sel.$from.nodeAfter?.marks ?? [];
+  } else {
+    // 选区态：取选区内第一个字的格式
+    marks = sel.$from.nodeAfter?.marks ?? sel.$from.marks();
+  }
   const style = marks.find(m => m.type.name === 'textStyle');
   return {
     bold: marks.some(m => m.type.name === 'bold'),
