@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { EditorView } from '@codemirror/view';
-import { getCode, putCode } from '../lib/db';
+import { getCode, getMeta, putCode, putMeta } from '../lib/db';
 import { makeEditorView } from '../lib/cm';
 import { runCpp, type RunResult } from '../lib/compile';
+import { debounce } from '../lib/util';
 import { nodes } from '../state';
 
 type RunState =
@@ -54,6 +55,27 @@ export default function CodeEditor({ docId }: { docId: string }) {
   const [stdin, setStdin] = useState('');
   const [run, setRun] = useState<RunState>({ phase: 'idle' });
   const [online, setOnline] = useState(navigator.onLine);
+  const stdinDirtyRef = useRef(false);
+  const stdinRef = useRef('');
+
+  // stdin 按文档自动保存，切页/刷新不丢
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await getMeta<string>(`stdin:${docId}`);
+      if (!cancelled && saved != null) setStdin(saved);
+    })();
+    return () => {
+      cancelled = true;
+      if (stdinDirtyRef.current && !nodes.value.has(docId)) return;
+      if (stdinDirtyRef.current) {
+        void putMeta(`stdin:${docId}`, stdinRef.current).catch(() => {});
+      }
+    };
+  }, [docId]);
+  const saveStdin = debounce((v: string) => {
+    void putMeta(`stdin:${docId}`, v).catch(() => {});
+  }, 500);
 
   useEffect(() => {
     const on = () => setOnline(true);
@@ -139,10 +161,16 @@ export default function CodeEditor({ docId }: { docId: string }) {
         </div>
         <textarea
           class="stdin"
-          placeholder="程序 stdin 输入：把程序要读的全部数据提前填在这里（空格/换行分隔）"
+          placeholder="程序 stdin 输入：把程序要读的全部数据提前填在这里（空格/换行分隔，半角数字）"
           spellcheck={false}
           value={stdin}
-          onInput={e => setStdin((e.target as HTMLTextAreaElement).value)}
+          onInput={e => {
+            const v = (e.target as HTMLTextAreaElement).value;
+            setStdin(v);
+            stdinRef.current = v;
+            stdinDirtyRef.current = true;
+            saveStdin(v);
+          }}
         />
         <div class="stdin-hint">
           ⌨ 程序里所有 cin / scanf 的输入都来自上面输入框，须在点「运行」前一次填完；在线编译不支持运行中逐步输入
