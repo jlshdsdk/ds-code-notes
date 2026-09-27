@@ -249,6 +249,11 @@ button.ghost-btn {
 }
 button.ghost-btn:hover { background: #eef2f7; }
 .nt-bold { font-weight: 700; }
+.brush-on {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
 .nt-toolbar select {
   height: 28px; border: 1px solid var(--border); border-radius: 6px;
   background: #fff; color: var(--text); padding: 0 4px;

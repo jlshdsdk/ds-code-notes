@@ -115,6 +115,29 @@ export interface SnippetDraft {
 }
 const snippetDraft = signal<SnippetDraft | null>(null);
 
+// ---------------- 格式刷 ----------------
+
+interface BrushFormat {
+  bold: boolean;
+  color: string | null;
+  fontSize: string | null;
+  fontFamily: string | null;
+}
+const brushState = signal<BrushFormat | null>(null);
+let brushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 取光标/选区起点处的格式（Word 格式刷语义：光标在样板文字上） */
+function captureFormat(ed: Editor): BrushFormat {
+  const marks = ed.state.selection.$from.marks();
+  const style = marks.find(m => m.type.name === 'textStyle');
+  return {
+    bold: marks.some(m => m.type.name === 'bold'),
+    color: (style?.attrs.color as string | null) ?? null,
+    fontSize: (style?.attrs.fontSize as string | null) ?? null,
+    fontFamily: (style?.attrs.fontFamily as string | null) ?? null,
+  };
+}
+
 const CppSnippet = Node.create({
   name: 'cppSnippet',
   group: 'block',
@@ -174,7 +197,8 @@ const CppSnippet = Node.create({
 /** 工具栏按钮按下时不抢走编辑器焦点（TipTap 工具栏标准做法） */
 const keepFocus = (e: MouseEvent) => e.preventDefault();
 
-function SnippetModal() {  const draft = snippetDraft.value!;
+function SnippetModal() {
+  const draft = snippetDraft.value!;
   const [code, setCode] = useState(draft.code);
   return (
     <div class="modal-mask" onClick={() => (snippetDraft.value = null)}>
@@ -283,13 +307,44 @@ export default function NoteEditor({ docId }: { docId: string }) {
       if (import.meta.env.DEV) {
         (window as unknown as Record<string, unknown>).__dsEditor = ed;
       }
-      ed.on('transaction', () => force(v => v + 1));
+      // 格式刷：armed 后用户完成一段新选择 → 把记录的格式刷上去并收起
+      // 拖拽选择会连续产生事务，用 250ms 防抖等选择稳定后再刷
+      ed.on('transaction', ({ transaction }) => {
+        const bs = brushState.value;
+        if (bs && !transaction.selection.empty) {
+          if (brushTimer) clearTimeout(brushTimer);
+          brushTimer = setTimeout(() => {
+            if (ed.isDestroyed) {
+              brushState.value = null;
+              return;
+            }
+            const cur = brushState.value;
+            if (!cur) return;
+            const sel = ed.state.selection;
+            if (sel.empty) return;
+            brushState.value = null;
+            const c = ed.chain().focus().setTextSelection({ from: sel.from, to: sel.to });
+            if (cur.bold) c.setMark('bold');
+            else c.unsetMark('bold');
+            if (cur.color) c.setColor(cur.color);
+            else c.unsetColor();
+            if (cur.fontSize) c.setFontSize(cur.fontSize);
+            else c.unsetFontSize();
+            if (cur.fontFamily) c.setFontFamily(cur.fontFamily);
+            else c.unsetFontFamily();
+            c.run();
+          }, 250);
+        }
+        force(v => v + 1);
+      });
       setEditor(ed);
     })();
     return () => {
       cancelled = true;
       document.removeEventListener('visibilitychange', onVis);
       snippetDraft.value = null;
+      brushState.value = null;
+      if (brushTimer) clearTimeout(brushTimer);
       save?.cancel();
       const ed = editorRef.current;
       if (ed) {
@@ -389,6 +444,20 @@ export default function NoteEditor({ docId }: { docId: string }) {
           onClick={() => chain().unsetColor().unsetFontSize().unsetFontFamily().run()}
         >
           默认
+        </button>
+        <button
+          class={brushState.value ? 'ghost-btn brush-on' : 'ghost-btn'}
+          disabled={!editor}
+          title="格式刷：把光标放到要复制的格式上点这里，再选中要改的文字（再点一次取消）"
+          onMouseDown={keepFocus}
+          onClick={() => {
+            const ed = editorRef.current;
+            if (!ed) return;
+            brushState.value = brushState.value ? null : captureFormat(ed);
+            force(v => v + 1);
+          }}
+        >
+          🖌 格式刷
         </button>
         <span class="sep" />
         <button
