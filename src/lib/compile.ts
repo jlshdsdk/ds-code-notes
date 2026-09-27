@@ -113,7 +113,9 @@ export async function runCpp(code: string, stdin: string): Promise<RunResult> {
             ? '段错误（SIGSEGV）——检查空指针 / 数组越界'
             : n === 134
               ? 'abort() 异常终止'
-              : `程序退出码 ${status}`;
+              : n === 132
+                ? '非法指令（SIGILL）——常见原因：声明了返回值的函数漏写 return 语句'
+                : `程序退出码 ${status}`;
       return {
         kind: 'runtime',
         stdout: data.program_output ?? '',
