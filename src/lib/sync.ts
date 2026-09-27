@@ -455,6 +455,10 @@ export async function initAuth(): Promise<void> {
   window.addEventListener('online', () => {
     if (sessionSig.value) void pushNow();
   });
+  // 关页/切走前把待推送的改动立即上云（不等待 1.5s 防抖）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && sessionSig.value) void pushNow();
+  });
   window.addEventListener('focus', () => {
     if (sessionSig.value) void pullNow();
   });
