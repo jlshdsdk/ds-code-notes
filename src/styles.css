@@ -161,7 +161,13 @@ body {
 }
 .nt-toolbar .sep { width: 1px; height: 20px; background: var(--border); }
 .nt-host { flex: 1; overflow: auto; background: var(--panel); }
-.ProseMirror { outline: none; min-height: 100%; padding: 18px 22px 40vh; line-height: 1.7; }
+.ProseMirror {
+  outline: none; min-height: 100%; padding: 18px 22px 40vh;
+  /* 默认字体与行距参考用户教材截图：黑体系 16px、2 倍行距 */
+  font-family: "Microsoft YaHei", "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", sans-serif;
+  font-size: 16px;
+  line-height: 2;
+}
 /* 行距全篇统一：块级元素外边距归零，行距只由 line-height 决定 */
 .ProseMirror p, .ProseMirror h1, .ProseMirror h2, .ProseMirror h3,
 .ProseMirror h4, .ProseMirror h5, .ProseMirror h6,
