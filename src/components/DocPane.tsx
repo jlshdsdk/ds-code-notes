@@ -1,11 +1,21 @@
-import { signal } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
 import { lazy, Suspense } from 'preact/compat';
-import { currentDocId, nodes } from '../state';
+import { currentDocId, nodes, uiPersistEnabled } from '../state';
 
 const NoteEditor = lazy(() => import('./NoteEditor'));
 const CodeEditor = lazy(() => import('./CodeEditor'));
 
-export const activeTab = signal<'note' | 'code'>('note');
+const UI_TAB_KEY = 'ds-ui-tab';
+export const activeTab = signal<'note' | 'code'>(
+  (localStorage.getItem(UI_TAB_KEY) as 'note' | 'code') || 'note'
+);
+effect(() => {
+  const t = activeTab.value;
+  if (!uiPersistEnabled()) return;
+  try {
+    localStorage.setItem(UI_TAB_KEY, t);
+  } catch { /* ignore */ }
+});
 
 export function DocPane() {
   const id = currentDocId.value;

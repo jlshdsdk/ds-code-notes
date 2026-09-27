@@ -1,4 +1,4 @@
-import { signal } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import {
   childrenByParent,
@@ -8,6 +8,7 @@ import {
   nodes,
   removeNodes,
   showToast,
+  uiPersistEnabled,
   upsertNode,
 } from '../state';
 import {
@@ -37,6 +38,40 @@ export function expandAllDirs(): void {
   for (const n of nodes.value.values()) if (n.kind === 'dir') s.add(n.id);
   expanded.value = s;
 }
+
+const UI_EXPANDED_KEY = 'ds-ui-expanded';
+
+/** 启动时恢复目录展开状态（没存过则全展开），并保证当前文档的祖先目录是展开的 */
+export function initExpanded(currentDocId?: string | null): void {
+  let restored = false;
+  try {
+    const saved = localStorage.getItem(UI_EXPANDED_KEY);
+    if (saved) {
+      expanded.value = new Set(JSON.parse(saved) as string[]);
+      restored = true;
+    }
+  } catch { /* ignore */ }
+  if (!restored) expandAllDirs();
+  if (currentDocId) {
+    const s = new Set(expanded.value);
+    let p = nodes.value.get(currentDocId)?.parentId ?? null;
+    let guard = 0;
+    while (p && guard++ < 4) {
+      s.add(p);
+      p = nodes.value.get(p)?.parentId ?? null;
+    }
+    expanded.value = s;
+  }
+}
+
+// 展开状态变化即持久化（先读值保证订阅；启动恢复完成前不写，防初始空值覆盖）
+effect(() => {
+  const ids = JSON.stringify([...expanded.value]);
+  if (!uiPersistEnabled()) return;
+  try {
+    localStorage.setItem(UI_EXPANDED_KEY, ids);
+  } catch { /* ignore */ }
+});
 
 function toggleExpand(id: string): void {
   const s = new Set(expanded.value);

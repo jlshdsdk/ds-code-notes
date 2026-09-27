@@ -1,4 +1,4 @@
-import { computed, signal } from '@preact/signals';
+import { computed, effect, signal } from '@preact/signals';
 import type { AppSettings, NodeRow } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
@@ -63,4 +63,34 @@ export function depthOf(id: string): number {
     p = nodes.value.get(p)?.parentId ?? null;
   }
   return d;
+}
+
+// ---------------- UI 状态持久化（刷新/切页回来不丢当前笔记） ----------------
+
+const UI_DOC_KEY = 'ds-ui-doc';
+
+/** 启动恢复完成前禁止写入，避免模块初始化的空值覆盖已存状态 */
+let uiPersistReady = false;
+export function enableUiPersist(): void {
+  uiPersistReady = true;
+}
+export function uiPersistEnabled(): boolean {
+  return uiPersistReady;
+}
+
+// 打开的节点变化即落 localStorage（先读信号保证订阅，开关只控制是否写入）
+effect(() => {
+  const id = currentDocId.value;
+  if (!uiPersistEnabled()) return;
+  try {
+    localStorage.setItem(UI_DOC_KEY, id ?? '');
+  } catch { /* 存储不可用时忽略 */ }
+});
+
+/** 启动时恢复上次打开的笔记节点（节点已被删除则回初始页） */
+export function restoreUiState(): void {
+  try {
+    const docId = localStorage.getItem(UI_DOC_KEY);
+    if (docId && nodes.value.has(docId)) currentDocId.value = docId;
+  } catch { /* ignore */ }
 }

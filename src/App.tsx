@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
-import { Sidebar, expandAllDirs } from './components/Sidebar';
+import { Sidebar, initExpanded } from './components/Sidebar';
 import { DocPane } from './components/DocPane';
 import { TopBar } from './components/TopBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ConfirmHost, Toast } from './components/Modal';
-import { setNodeMap } from './state';
+import { currentDocId, enableUiPersist, restoreUiState, setNodeMap } from './state';
 import { loadNodes } from './lib/db';
 import { loadSettings } from './lib/settings';
 import { initAuth } from './lib/sync';
@@ -19,7 +19,10 @@ export function App() {
         await loadSettings();
         await initAuth();
         setNodeMap(await loadNodes());
-        expandAllDirs();
+        // 恢复上次打开的笔记与目录展开状态，恢复完成后再允许持久化写入
+        restoreUiState();
+        initExpanded(currentDocId.value);
+        enableUiPersist();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }
