@@ -139,11 +139,14 @@ export default function CodeEditor({ docId }: { docId: string }) {
         </div>
         <textarea
           class="stdin"
-          placeholder="程序 stdin 输入（运行前一次性填入，如 scanf 要读的数据）"
+          placeholder="程序 stdin 输入：把程序要读的全部数据提前填在这里（空格/换行分隔）"
           spellcheck={false}
           value={stdin}
           onInput={e => setStdin((e.target as HTMLTextAreaElement).value)}
         />
+        <div class="stdin-hint">
+          ⌨ 程序里所有 cin / scanf 的输入都来自上面输入框，须在点「运行」前一次填完；在线编译不支持运行中逐步输入
+        </div>
         <pre class="run-out">
           {run.phase === 'idle' && '输出区（运行后显示 stdout / stderr）'}
           {run.phase === 'running' && '运行中，请稍候…'}
