@@ -87,10 +87,14 @@ effect(() => {
   } catch { /* 存储不可用时忽略 */ }
 });
 
-/** 启动时恢复上次打开的笔记节点（节点已被删除则回初始页） */
+/** 启动时恢复上次打开的笔记节点；当前指向的节点已不存在则清空回初始页 */
 export function restoreUiState(): void {
   try {
     const docId = localStorage.getItem(UI_DOC_KEY);
-    if (docId && nodes.value.has(docId)) currentDocId.value = docId;
+    if (docId && nodes.value.has(docId)) {
+      currentDocId.value = docId;
+    } else if (currentDocId.value && !nodes.value.has(currentDocId.value)) {
+      currentDocId.value = null;
+    }
   } catch { /* ignore */ }
 }

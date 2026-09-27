@@ -11,7 +11,8 @@ import {
   setScope,
   type DirtyKind,
 } from './db';
-import { setNodeMap } from '../state';
+import { setNodeMap, restoreUiState, currentDocId } from '../state';
+import { initExpanded } from '../components/Sidebar';
 import type { NodeRow } from '../types';
 
 export type SyncStatus = 'local' | 'pending' | 'syncing' | 'synced' | 'offline' | 'uninit';
@@ -476,16 +477,28 @@ export async function initAuth(): Promise<void> {
   supabase.auth.onAuthStateChange((ev, s2) => {
     if (ev === 'SIGNED_IN' && s2) {
       void (async () => {
+        // 同一用户重复触发（令牌刷新/网络抖动/页面回焦）时忽略，绝不整页刷新
+        const prev = sessionSig.value;
+        if (prev?.user.id === s2.user.id && getScope() === s2.user.id) return;
         sessionSig.value = s2;
         await adoptScope(s2.user.id);
-        location.reload();
+        restoreUiState();
+        initExpanded(currentDocId.value);
       })();
     } else if (ev === 'SIGNED_OUT') {
-      sessionSig.value = null;
-      profileSig.value = null;
-      dirty = freshDirty();
-      setScope('local');
-      location.reload();
+      void (async () => {
+        // 网络抖动可能产生假登出事件：核实会话真没了才切换
+        const { data } = await supabase.auth.getSession();
+        if (data.session) return;
+        sessionSig.value = null;
+        profileSig.value = null;
+        dirty = freshDirty();
+        setScope('local');
+        setNodeMap(await loadNodes());
+        restoreUiState();
+        initExpanded(currentDocId.value);
+        syncStatus.value = 'local';
+      })();
     }
   });
 }

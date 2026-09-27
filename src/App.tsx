@@ -4,10 +4,10 @@ import { DocPane } from './components/DocPane';
 import { TopBar } from './components/TopBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ConfirmHost, Toast } from './components/Modal';
-import { currentDocId, enableUiPersist, restoreUiState, setNodeMap } from './state';
+import { currentDocId, enableUiPersist, restoreUiState, setNodeMap, showToast } from './state';
 import { loadNodes } from './lib/db';
 import { loadSettings } from './lib/settings';
-import { initAuth } from './lib/sync';
+import { initAuth, syncStatus } from './lib/sync';
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -15,18 +15,29 @@ export function App() {
 
   useEffect(() => {
     (async () => {
+      // 先用本地数据渲染（不等云端），避免每次进入白屏等待
       try {
         await loadSettings();
-        await initAuth();
         setNodeMap(await loadNodes());
-        // 恢复上次打开的笔记与目录展开状态，恢复完成后再允许持久化写入
         restoreUiState();
         initExpanded(currentDocId.value);
         enableUiPersist();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
+        setReady(true);
+        return;
       }
       setReady(true);
+      // 云端接管放后台：失败不影响本地使用
+      try {
+        await initAuth();
+      } catch (e) {
+        showToast('云端连接失败，当前仅本地模式');
+        syncStatus.value = 'offline';
+      }
+      setNodeMap(await loadNodes());
+      restoreUiState();
+      initExpanded(currentDocId.value);
     })();
   }, []);
 
