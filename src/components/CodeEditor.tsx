@@ -172,6 +172,9 @@ export default function CodeEditor({ docId }: { docId: string }) {
             saveStdin(v);
           }}
         />
+        <div class="stdin-hint">
+          ⌨ 程序里所有 cin / scanf 的输入都来自上面输入框，须在点「运行」前一次填完；在线编译不支持运行中逐步输入
+        </div>
         <pre class="run-out">
           {run.phase === 'idle' && '输出区（运行后显示 stdout / stderr）'}
           {run.phase === 'running' && '运行中，请稍候…'}

@@ -231,6 +231,10 @@ body {
 .run-out .cc-info { color: var(--muted); display: block; margin-top: 6px; opacity: 0.85; }
 .run-out .out-label { display: block; margin-bottom: 4px; }
 .run-out .out-label.err { color: var(--danger); font-weight: 600; }
+.stdin-hint {
+  flex: none; color: var(--muted); font-size: 12px; padding: 2px 12px;
+  background: #fafbfc; border-bottom: 1px solid var(--border);
+}
 
 /* ---------- buttons / modal / toast ---------- */
 button.primary {
