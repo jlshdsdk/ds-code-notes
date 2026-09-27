@@ -245,6 +245,12 @@ button.ghost-btn:hover { background: #eef2f7; }
   width: 30px; height: 26px; border: 1px solid var(--border);
   border-radius: 6px; padding: 1px; background: #fff; cursor: pointer;
 }
+.color-swatch {
+  width: 22px; height: 22px; border-radius: 50%; padding: 0;
+  border: 1px solid var(--border); cursor: pointer; flex: none;
+}
+.color-swatch:hover { transform: scale(1.12); }
+.color-swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .modal-mask {
   position: fixed; inset: 0; background: rgba(15, 23, 42, 0.4);
   display: flex; align-items: center; justify-content: center; z-index: 50;

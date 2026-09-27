@@ -202,6 +202,12 @@ function SnippetModal() {  const draft = snippetDraft.value!;
 // ---------------- 主体 ----------------
 
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28];
+/** 笔记字体颜色预设（用户指定：黑/紫/红三选一） */
+const COLOR_SWATCHES: Array<[string, string]> = [
+  ['#000000', '黑色'],
+  ['#7c3aed', '紫色'],
+  ['#dc2626', '红色'],
+];
 const FONTS: Array<[string, string]> = [
   ['', '默认字体'],
   ['system-ui, "Microsoft YaHei", sans-serif', '系统默认'],
@@ -311,7 +317,6 @@ export default function NoteEditor({ docId }: { docId: string }) {
   const attrs = editor ? editor.getAttributes('textStyle') : {};
   const curSize = (attrs.fontSize as string | undefined) ?? '';
   const curFont = (attrs.fontFamily as string | undefined) ?? '';
-  const curColor = (attrs.color as string | undefined) ?? '#000000';
   const chain = () => editor!.chain().focus();
 
   return (
@@ -360,13 +365,21 @@ export default function NoteEditor({ docId }: { docId: string }) {
             </option>
           ))}
         </select>
-        <input
-          type="color"
-          title="字体颜色"
-          disabled={!editor}
-          value={curColor}
-          onInput={e => chain().setColor((e.target as HTMLInputElement).value).run()}
-        />
+        {COLOR_SWATCHES.map(([value, label]) => (
+          <button
+            key={value}
+            class={
+              (attrs.color as string | undefined)?.toLowerCase() === value
+                ? 'color-swatch on'
+                : 'color-swatch'
+            }
+            style={{ background: value }}
+            title={`字体颜色：${label}`}
+            disabled={!editor}
+            onMouseDown={keepFocus}
+            onClick={() => chain().setColor(value).run()}
+          />
+        ))}
         <button
           class="ghost-btn"
           disabled={!editor}
