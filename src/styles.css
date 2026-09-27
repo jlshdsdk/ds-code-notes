@@ -162,7 +162,13 @@ body {
 .nt-toolbar .sep { width: 1px; height: 20px; background: var(--border); }
 .nt-host { flex: 1; overflow: auto; background: var(--panel); }
 .ProseMirror { outline: none; min-height: 100%; padding: 18px 22px 40vh; line-height: 1.7; }
-.ProseMirror p { margin: 0.4em 0; }
+/* 行距全篇统一：块级元素外边距归零，行距只由 line-height 决定 */
+.ProseMirror p, .ProseMirror h1, .ProseMirror h2, .ProseMirror h3,
+.ProseMirror h4, .ProseMirror h5, .ProseMirror h6,
+.ProseMirror ul, .ProseMirror ol, .ProseMirror blockquote { margin: 0; }
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.5em; }
+.ProseMirror li p { margin: 0; }
+.ProseMirror blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
 .ProseMirror img.ds-note-img { max-width: 100%; border-radius: 4px; }
 .ds-img-wrap { margin: 8px 0; }
 .ds-snippet-wrap { position: relative; margin: 10px 0; }

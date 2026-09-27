@@ -260,7 +260,8 @@ export default function NoteEditor({ docId }: { docId: string }) {
       const saveDebounced = save;
       const ed = new Editor({
         element: hostRef.current,
-        extensions: [StarterKit, DsTextStyle, Color, DsImage, CppSnippet],
+        // 关闭 heading：所有文字统一字号与行距（用户要求行距全篇一致）
+        extensions: [StarterKit.configure({ heading: false }), DsTextStyle, Color, DsImage, CppSnippet],
         content: row?.html ?? '<p></p>',
         editorProps: {
           handlePaste: (_view, event) => {
@@ -325,7 +326,7 @@ export default function NoteEditor({ docId }: { docId: string }) {
         <button
           class={editor?.isActive('bold') ? 'ghost-btn nt-bold' : 'ghost-btn'}
           disabled={!editor}
-          title="加粗"
+          title="加粗 / 取消加粗（选中文字后点它，或 Ctrl+B）"
           onMouseDown={keepFocus}
           onClick={() => chain().toggleBold().run()}
         >
