@@ -2,7 +2,7 @@ import { signal } from '@preact/signals';
 import { useRef, useState } from 'preact/hooks';
 import { currentDocId, showSettings } from '../state';
 import { searchAll, type SearchHit } from '../lib/search';
-import { profileSig, sessionSig, syncStatus, pullNow, signOut } from '../lib/sync';
+import { profileSig, sessionSig, syncStatus, forceFullPull, signOut } from '../lib/sync';
 import { AuthModal } from './AuthModal';
 import { AdminPanel } from './AdminPanel';
 
@@ -22,7 +22,7 @@ const SYNC_TITLE: Record<string, string> = {
   local: '点击登录 / 注册',
   pending: '有改动待推送到云端，点击立即同步',
   syncing: '正在与云端同步…',
-  synced: '已与云端同步，点击立即拉取',
+  synced: '已与云端同步，点击立即从云端全量拉取',
   offline: '刚才的同步请求失败（网络问题），稍后会自动重试',
   uninit: '云端数据表还没建：请先在 Supabase SQL Editor 执行仓库里的 supabase_setup_ds.sql，执行完刷新本页即可',
 };
@@ -95,7 +95,7 @@ export function TopBar() {
         <button
           class="ghost-btn sync-btn"
           title={SYNC_TITLE[st] ?? ''}
-          onClick={() => (sess ? void pullNow() : (showAuth.value = true))}
+          onClick={() => (sess ? void forceFullPull() : (showAuth.value = true))}
         >
           {SYNC_ICON[st] ?? ''}
         </button>

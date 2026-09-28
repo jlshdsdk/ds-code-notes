@@ -358,6 +358,13 @@ export async function pullNow(): Promise<void> {
   }
 }
 
+/** 手动强制全量拉取：无视增量游标，从云端重新拉全部数据（同步角标点击时调用） */
+export async function forceFullPull(): Promise<void> {
+  if (!sessionSig.value || getScope() === 'local') return;
+  await putMeta('lastPullAt', 0);
+  await pullNow();
+}
+
 // ---------------- 登录态与作用域切换 ----------------
 
 async function adoptScope(userId: string): Promise<void> {
