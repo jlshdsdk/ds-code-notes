@@ -351,6 +351,20 @@ export async function pullNow(): Promise<void> {
     await putMeta('lastPullAt', maxServerMs);
     setNodeMap(await loadNodes());
     syncStatus.value = 'synced';
+
+    // 完整性自愈（仅全量拉取时）：本地有、云端没有的节点 → 补推。
+    // 历史 bug：登录瞬间的页面重载曾中断目录节点的首次推送，笔记正文能靠后续编辑重推，
+    // 创建后不再变动的目录就永远漏了（云端出现"悬空文档"，其他设备显示空树）。
+    if (lastMs < 60_000) {
+      const cloudIds = new Set(nR.map(r => String(r.id)));
+      const localNodes = await d.getAll('nodes');
+      const gaps = localNodes.filter(n => !cloudIds.has(n.id) && !dirty.nodes.has(n.id));
+      if (gaps.length > 0) {
+        for (const g of gaps) dirty.nodes.add(g.id);
+        syncStatus.value = 'pending';
+        void pushNow();
+      }
+    }
   } catch (e) {
     syncStatus.value = isUninitError(e) ? 'uninit' : 'offline';
   } finally {
