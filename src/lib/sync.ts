@@ -363,6 +363,8 @@ export async function pullNow(): Promise<void> {
 async function adoptScope(userId: string): Promise<void> {
   setScope(userId);
   setNodeMap(await loadNodes());
+  // 新设备/空树场景强制全量拉取（清掉增量游标），杜绝"登录后一片空白"
+  if ((await loadNodes()).length === 0) await putMeta('lastPullAt', 0);
   // 先拉平云端，再合并未登录期的本地数据，避免本机旧数据回滚云端
   await pullNow();
   const guestNodes = await loadNodes('local');
@@ -459,8 +461,13 @@ export async function initAuth(): Promise<void> {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && sessionSig.value) void pushNow();
   });
+  // 页面回焦：空树且已登录 → 强制全量拉取（兜底"别的设备看不到数据"）
   window.addEventListener('focus', () => {
-    if (sessionSig.value) void pullNow();
+    if (!sessionSig.value || getScope() === 'local') return;
+    void (async () => {
+      if ((await loadNodes()).length === 0) await putMeta('lastPullAt', 0);
+      void pullNow();
+    })();
   });
   setInterval(() => {
     if (!sessionSig.value) return;
