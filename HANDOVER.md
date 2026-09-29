@@ -101,6 +101,7 @@ scripts/acceptance.mjs  编译后端 11 用例验收（8 个 DS 程序 + 3 个�
   3. `runtime`：status 128+n 信号解码（137=疑似死循环 / 139=段错误 / 134=abort / **132=漏写 return 的 SIGILL，学生会高频踩**）
 - 特殊坑：输出 ≥131072 字节时 Wandbox **截断且 status 为空串**（归一为正常退出 + 显示截断提示）
 - 验收：`node scripts/acceptance.mjs` 须 11/11 通过（需联网）
+- **提速设计**（2026-09-28 加入）：`runCpp` 带 LRU 结果缓存（键=后端+代码+stdin，容量 30，网络错误不缓存），重复运行相同代码+输入秒出；`index.html` 对 wandbox.org 的 preconnect 必须带 `crossorigin`（跨域 fetch 复用的是 CORS 连接，不带则预热无效）；服务器端编译耗时 2.5–3.2s 是物理下限，除非改编译器/去警告（会改变行为，勿动）
 
 ## 8. 用户确认的产品决策（勿擅自更改）
 

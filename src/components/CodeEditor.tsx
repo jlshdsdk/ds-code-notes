@@ -55,8 +55,20 @@ export default function CodeEditor({ docId }: { docId: string }) {
   const [stdin, setStdin] = useState('');
   const [run, setRun] = useState<RunState>({ phase: 'idle' });
   const [online, setOnline] = useState(navigator.onLine);
+  const [elapsed, setElapsed] = useState(0);
   const stdinDirtyRef = useRef(false);
   const stdinRef = useRef('');
+
+  // 运行中显示已耗时（长编译/死循环场景有反馈）
+  useEffect(() => {
+    if (run.phase !== 'running') return;
+    const t0 = Date.now();
+    setElapsed(0);
+    const iv = setInterval(() => {
+      setElapsed(Math.round((Date.now() - t0) / 100) / 10);
+    }, 200);
+    return () => clearInterval(iv);
+  }, [run.phase]);
 
   // stdin 按文档自动保存，切页/刷新不丢
   useEffect(() => {
@@ -155,7 +167,7 @@ export default function CodeEditor({ docId }: { docId: string }) {
             {!online
               ? '当前离线——编译运行需要联网调用在线 GCC'
               : running
-                ? '正在提交到在线 GCC（Wandbox）…'
+                ? `正在编译运行… 已用 ${elapsed.toFixed(1)}s`
                 : '在线编译：GCC 13.2.0（-Wall -Wextra -std=gnu++17）'}
           </span>
         </div>

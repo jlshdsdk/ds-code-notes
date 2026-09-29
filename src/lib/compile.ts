@@ -58,7 +58,36 @@ const TIMEOUT_MS = 45_000;
 /** Wandbox 对超长输出硬截断到 131072 字节，此时 status 是空串 */
 const WANDOX_MAX_OUTPUT = 131072;
 
+// ---------------- 结果缓存：相同（后端+代码+stdin）重复运行秒出 ----------------
+
+const resultCache = new Map<string, RunResult>();
+const CACHE_MAX = 30;
+
+/**
+ * 编译运行。相同代码与输入的重复运行直接返回缓存结果（网络错误不缓存）。
+ * 输出确定性：同一程序同一 stdin 输出必然相同，缓存安全。
+ */
 export async function runCpp(code: string, stdin: string): Promise<RunResult> {
+  const cacheKey = `${activeBackend}\0${code}\0${stdin}`;
+  const hit = resultCache.get(cacheKey);
+  if (hit) {
+    // LRU：命中后移到队尾
+    resultCache.delete(cacheKey);
+    resultCache.set(cacheKey, hit);
+    return hit;
+  }
+  const result = await runCppRemote(code, stdin);
+  if (result.kind !== 'network') {
+    if (resultCache.size >= CACHE_MAX) {
+      const oldest = resultCache.keys().next().value;
+      if (oldest !== undefined) resultCache.delete(oldest);
+    }
+    resultCache.set(cacheKey, result);
+  }
+  return result;
+}
+
+async function runCppRemote(code: string, stdin: string): Promise<RunResult> {
   const backend = getActiveBackend();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
