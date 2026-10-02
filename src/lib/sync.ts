@@ -55,6 +55,46 @@ let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let pushBusy = false;
 let pullBusy = false;
 
+function hasDirty(): boolean {
+  return (
+    dirty.nodes.size > 0 ||
+    dirty.notes.size > 0 ||
+    dirty.code.size > 0 ||
+    dirty.images.size > 0 ||
+    dirty.deletedNodes.length > 0
+  );
+}
+
+/** 排队清单持久化到 IndexedDB：刷新/崩溃/杀进程都不丢待推送内容 */
+const DIRTY_KEY = 'dirtyQueue';
+function persistDirty(): void {
+  void putMeta(DIRTY_KEY, {
+    n: [...dirty.nodes],
+    o: [...dirty.notes],
+    c: [...dirty.code],
+    i: [...dirty.images],
+    d: dirty.deletedNodes,
+  }).catch(() => {});
+}
+
+async function restoreDirty(): Promise<void> {
+  try {
+    const q = await getMeta<{
+      n?: string[];
+      o?: string[];
+      c?: string[];
+      i?: string[];
+      d?: string[][];
+    }>(DIRTY_KEY);
+    if (!q) return;
+    (q.n ?? []).forEach(id => dirty.nodes.add(id));
+    (q.o ?? []).forEach(id => dirty.notes.add(id));
+    (q.c ?? []).forEach(id => dirty.code.add(id));
+    (q.i ?? []).forEach(id => dirty.images.add(id));
+    (q.d ?? []).forEach(ids => dirty.deletedNodes.push(ids));
+  } catch { /* ignore */ }
+}
+
 function onDirty(kind: DirtyKind, id: string | string[]): void {
   if (getScope() === 'local' || !sessionSig.value) return;
   switch (kind) {
@@ -75,6 +115,7 @@ function onDirty(kind: DirtyKind, id: string | string[]): void {
       break;
   }
   syncStatus.value = 'pending';
+  persistDirty();
   if (pushTimer) clearTimeout(pushTimer);
   pushTimer = setTimeout(() => void pushNow(), 1500);
 }
@@ -237,6 +278,7 @@ export async function pushNow(): Promise<void> {
       didWork = true;
     }
     syncStatus.value = 'synced';
+    persistDirty();
     // 推送成功后拉一次，让本地 updated_at 收敛到服务器时钟（有脏保护不会覆盖未推送修改）
     if (didWork) setTimeout(() => void pullNow(), 800);
   } catch (e) {
@@ -245,6 +287,7 @@ export async function pushNow(): Promise<void> {
     snap.code.forEach(id => dirty.code.add(id));
     snap.images.forEach(id => dirty.images.add(id));
     dirty.deletedNodes.push(...snap.deletedNodes);
+    persistDirty();
     if (isUninitError(e)) {
       // 云表未建：保留脏集合但不空转重试，等下次触发（编辑/聚焦/上线）
       syncStatus.value = 'uninit';
@@ -254,6 +297,11 @@ export async function pushNow(): Promise<void> {
     }
   } finally {
     pushBusy = false;
+    // 反卡死：只要有残留待推送且没有排定重试，立即排一次
+    // （堵住"重试定时器在推送飞行中触发被丢弃→永远无人重试"的洞）
+    if (hasDirty() && !pushTimer) {
+      pushTimer = setTimeout(() => void pushNow(), 1200);
+    }
   }
 }
 
@@ -384,10 +432,13 @@ export async function forceFullPull(): Promise<void> {
 async function adoptScope(userId: string): Promise<void> {
   setScope(userId);
   setNodeMap(await loadNodes());
+  // 恢复上次未推送完的排队清单（刷新/崩溃前遗留的待推送内容）
+  await restoreDirty();
   // 新设备/空树场景强制全量拉取（清掉增量游标），杜绝"登录后一片空白"
   if ((await loadNodes()).length === 0) await putMeta('lastPullAt', 0);
   // 先拉平云端，再合并未登录期的本地数据，避免本机旧数据回滚云端
   await pullNow();
+  if (hasDirty()) void pushNow();
   const guestNodes = await loadNodes('local');
   if (guestNodes.length > 0) {
     const src = await getDB('local');
