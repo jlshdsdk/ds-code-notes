@@ -400,15 +400,31 @@ export async function pullNow(): Promise<void> {
     setNodeMap(await loadNodes());
     syncStatus.value = 'synced';
 
-    // 完整性自愈（仅全量拉取时）：本地有、云端没有的节点 → 补推。
-    // 历史 bug：登录瞬间的页面重载曾中断目录节点的首次推送，笔记正文能靠后续编辑重推，
-    // 创建后不再变动的目录就永远漏了（云端出现"悬空文档"，其他设备显示空树）。
+    // 完整性自愈（仅全量拉取时）——双向对账：
+    // ① 本地有、云端没有的行 → 补推（历史 bug：登录瞬间重载中断目录首次推送，产生"悬空文档"）
+    // ② 本地比云端新的行 → 补推（兜底：推送卡死期间刷新页面丢失内存排队清单的编辑）
     if (lastMs < 60_000) {
-      const cloudIds = new Set(nR.map(r => String(r.id)));
+      const cloudNodeById = new Map(nR.map(r => [String(r.id), r]));
       const localNodes = await d.getAll('nodes');
-      const gaps = localNodes.filter(n => !cloudIds.has(n.id) && !dirty.nodes.has(n.id));
-      if (gaps.length > 0) {
-        for (const g of gaps) dirty.nodes.add(g.id);
+      for (const ln of localNodes) {
+        if (dirty.nodes.has(ln.id)) continue;
+        const c = cloudNodeById.get(ln.id);
+        if (!c || ln.updatedAt > Date.parse(String(c.updated_at)) + 2000) dirty.nodes.add(ln.id);
+      }
+      const cloudNoteMs = new Map(noR.map(r => [String(r.doc_id), Date.parse(String(r.updated_at))]));
+      for (const ln of await d.getAll('notes')) {
+        if (dirty.notes.has(ln.docId)) continue;
+        const cms = cloudNoteMs.get(ln.docId);
+        if (cms === undefined || ln.updatedAt > cms + 2000) dirty.notes.add(ln.docId);
+      }
+      const cloudCodeMs = new Map(cR.map(r => [String(r.doc_id), Date.parse(String(r.updated_at))]));
+      for (const ln of await d.getAll('code')) {
+        if (dirty.code.has(ln.docId)) continue;
+        const cms = cloudCodeMs.get(ln.docId);
+        if (cms === undefined || ln.updatedAt > cms + 2000) dirty.code.add(ln.docId);
+      }
+      if (hasDirty()) {
+        persistDirty();
         syncStatus.value = 'pending';
         void pushNow();
       }
